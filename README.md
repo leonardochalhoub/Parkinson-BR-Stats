@@ -1,2 +1,2 @@
 # Parkinson-BR-Stats
-Pipeline de análise de dados sobre a infraestrutura relacionada ao diagnóstico de Doença de Parkinson no Brasil. Repositório dedicado ao processamento de microdados e mapeamento da infraestrutura de ressonância magnética nacional, visando embasar recomendações de políticas públicas e estratégias de diagnóstico precoce. Este projeto é parte do trabalho acadêmico de Alexandre Rolim, Mestre em Proteção Radiológica, iniciado em 2026.
+Pipeline de análise de dados sobre a Doença de Parkinson no Brasil. Repositório dedicado ao processamento de microdados epidemiológicos e mapeamento da infraestrutura de ressonância magnética nacional, visando embasar recomendações de políticas públicas e estratégias de diagnóstico precoce.
