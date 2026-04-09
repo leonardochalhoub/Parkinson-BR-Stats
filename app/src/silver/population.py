@@ -1,12 +1,16 @@
 """
 Silver job: population (UF x Year) panel with linear interpolation/extrapolation.
 
-Adapted from getPBFData `app/src/silver/populacao_uf_ano.py`, with small changes:
-- output table name: `lakehouse/silver/population`
-- year range: from minimum available year in Bronze payload up to 2025 (inclusive)
+This builds a complete UF×Year panel from IBGE/SIDRA Bronze JSON payload
+and writes it as a Delta table in the Silver layer.
+
+Origin:
+- Logic adapted from https://github.com/leonardochalhoub/getPBFData
+  (population UF×year panel with linear interpolation for missing years).
 
 Input (Bronze Delta):
 - lakehouse/bronze/ibge/sidra_agregados_6579_var_9324_populacao_uf_raw_json
+  Expected schema includes: payload_json (string), containing SIDRA JSON response.
 
 Output (Silver Delta):
 - lakehouse/silver/population
@@ -33,7 +37,7 @@ BRONZE_SIDRA_PATH = "lakehouse/bronze/ibge/sidra_agregados_6579_var_9324_populac
 
 
 def _uf_id_to_sigla_map() -> dict[str, str]:
-    # Same mapping used in getPBFData
+    # Same mapping used in getPBFData / IBGE UF codes (2-digit).
     return {
         "11": "RO",
         "12": "AC",
@@ -66,6 +70,12 @@ def _uf_id_to_sigla_map() -> dict[str, str]:
 
 
 def _extract_rows_from_sidra_json(ibge_json: list[dict]) -> list[tuple[int, str, float]]:
+    """
+    Extract (Ano, uf, populacao) rows from SIDRA response JSON.
+
+    The Bronze payload is the full JSON response; we navigate:
+    resultados -> series -> localidade{id} + serie{ano: valor}.
+    """
     uf_id_to_sigla = _uf_id_to_sigla_map()
 
     out_rows: list[tuple[int, str, float]] = []
@@ -77,6 +87,7 @@ def _extract_rows_from_sidra_json(ibge_json: list[dict]) -> list[tuple[int, str,
                 uf = uf_id_to_sigla.get(uf_id)
                 if not uf:
                     continue
+
                 serie = s.get("serie", {}) or {}
                 for ano_str, val_str in serie.items():
                     if val_str in (None, "", "..."):
@@ -87,6 +98,7 @@ def _extract_rows_from_sidra_json(ibge_json: list[dict]) -> list[tuple[int, str,
                     except Exception:
                         continue
                     out_rows.append((ano, uf, pop))
+
     return out_rows
 
 
@@ -121,22 +133,33 @@ def _infer_min_year_from_bronze_payload(payload: list[dict]) -> int:
 
 def build_population(*, spark: SparkSession, end_year: int = 2025) -> DataFrame:
     """
-    Build a complete UF×Year panel from the Bronze payload up to end_year.
+    Build a complete UF×Year population panel up to end_year.
 
-    Filling rules (same as getPBFData):
+    Filling rules (as in getPBFData):
     - linear interpolation between known years
-    - linear extrapolation for edge gaps (carry last/next known value)
+    - linear extrapolation for edge gaps (use nearest known value)
     """
     df_bronze = spark.read.format("delta").load(BRONZE_SIDRA_PATH)
-    payload_str = df_bronze.select("payload_json").collect()[0][0]
+
+    # Expect exactly one row with the JSON payload.
+    payload_row = df_bronze.select("payload_json").limit(1).collect()
+    if not payload_row:
+        raise RuntimeError(f"No rows found in Bronze table at {BRONZE_SIDRA_PATH}")
+    payload_str = payload_row[0][0]
+    if payload_str is None or str(payload_str).strip() == "":
+        raise RuntimeError(f"Empty payload_json in Bronze table at {BRONZE_SIDRA_PATH}")
+
     payload = json.loads(payload_str)
 
     start_year = _infer_min_year_from_bronze_payload(payload)
 
     rows = _extract_rows_from_sidra_json(payload)
+    if not rows:
+        raise RuntimeError("No (Ano, uf, populacao) rows extracted from SIDRA payload")
+
     df_pop_raw = _rows_to_df(spark, rows)
 
-    # Limit to [start_year, end_year] (we don't want 2026+ for now)
+    # Keep within [start_year, end_year]
     df_pop_raw = df_pop_raw.where((F.col("Ano") >= F.lit(start_year)) & (F.col("Ano") <= F.lit(end_year)))
 
     # Full year grid for each UF
@@ -146,6 +169,7 @@ def build_population(*, spark: SparkSession, end_year: int = 2025) -> DataFrame:
 
     df_pop = df_grid.join(df_pop_raw, on=["uf", "Ano"], how="left")
 
+    # For each missing value, look for nearest known value on the left and right.
     w_left = (
         Window.partitionBy("uf")
         .orderBy(F.col("Ano").asc())
