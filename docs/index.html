@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MRI per capita (UF + Ano)</title>
+
+    <link rel="stylesheet" href="./styles.css" />
+
+    <!-- Plotly for bar chart + choropleth -->
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+    <!-- XLSX (SheetJS) for client-side Excel export -->
+    <script src="./vendor-xlsx.full.min.js"></script>
+
+    <!-- JSZip to bundle multiple PNGs into a single download -->
+    <script src="./vendor-jszip.min.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div>
+          <div class="titleRow">
+            <img class="brFlag" src="./brazil-flag.svg" alt="Brasil" />
+            <h2>MRI per capita - 2005-2025</h2>
+          </div>
+          <div class="subtitle">
+            Selecione ano e paleta para comparar o mapa por UF (MRI).
+          </div>
+        </div>
+
+        <div class="themeToggle">
+          <span class="kicker">Light</span>
+          <label class="switch" title="Alternar tema">
+            <input id="toggleDark" type="checkbox" />
+            <span class="slider"></span>
+          </label>
+          <span class="kicker">Dark</span>
+        </div>
+      </div>
+
+      <div class="layout">
+        <div class="mainGrid">
+          <div class="panel filtersPanel">
+            <div class="panelTitle">
+              <h3>Filtros e downloads</h3>
+              <div class="kicker">Dados locais (silver)</div>
+            </div>
+
+            <div class="controls">
+              <div class="control">
+                <label for="metric">Métrica</label>
+                <select id="metric">
+                  <option value="mri_per_capita_scaled" selected>MRI por 1M hab</option>
+                  <option value="total_mri_avg">Total MRI/ano (UF)</option>
+                </select>
+              </div>
+
+              <div class="control">
+                <label for="year">Ano</label>
+                <select id="year">
+                  <option value="AGG">Acumulado (2013–2025)</option>
+                </select>
+              </div>
+
+              <div class="control">
+                <button id="downloadXlsx" class="primary" type="button">Baixar Excel (dados completos)</button>
+              </div>
+
+              <div class="control">
+                <button id="downloadAllPng" class="primary" type="button">Baixar imagens (PNG)</button>
+              </div>
+
+              <div class="muted">
+                <div>
+                  <b>Fonte de dados (Silver):</b>
+                  <code>app/web/data/mri_br_state_year.json</code>
+                </div>
+              </div>
+
+              <div class="muted countersBox" style="margin-top: 10px">
+                <div class="kicker">Contadores</div>
+                <div class="counterRow">
+                  <span>Visitas:</span> <b id="visitCount">—</b>
+                </div>
+                <div class="counterRow">
+                  <span>Downloads:</span> <b id="downloadCount">—</b>
+                </div>
+                <div class="tinyMuted">
+                  Atualiza em alguns segundos.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div id="barWrap"></div>
+          </div>
+
+          <div class="panel">
+            <div id="benefWrap"></div>
+          </div>
+
+          <div class="panel mapPanel">
+            <div class="mapTopBar">
+              <div class="panelTitle" style="margin-bottom: 0">
+                <div class="kicker">Passe o mouse para detalhes</div>
+              </div>
+
+              <div class="mapControls">
+                <label for="colorscale">Cores</label>
+                <select id="colorscale">
+                  <option value="Viridis">Viridis (daltônico)</option>
+                  <option value="Cividis" selected>Cividis (daltônico)</option>
+                  <option value="Blues">Azuis (Blues)</option>
+                  <option value="Greens">Verdes (Greens)</option>
+                  <option value="Greys">Cinzas (Greys)</option>
+                  <option value="YlGnBu">Arco-íris suave (YlGnBu)</option>
+                  <option value="YlOrRd">Escala de calor (YlOrRd)</option>
+                  <option value="Magma">Magma</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="mapWrap"></div>
+          </div>
+
+          <div id="error" class="panel" style="display: none; border-color: #f5c2c7; background: #fff5f6"></div>
+          <div id="loading" class="muted" style="display: none; margin-top: 10px">Carregando…</div>
+
+          <div id="zipProgress" class="panel" style="display: none; margin-top: 10px">
+            <div class="kicker" style="margin-bottom: 8px">Gerando ZIP…</div>
+            <div style="display: flex; gap: 12px; align-items: center">
+              <progress id="zipProgressBar" max="100" value="0" style="width: 100%"></progress>
+              <div id="zipProgressText" class="muted" style="min-width: 70px; text-align: right">0%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top: 16px">
+        <div class="muted footerGrid">
+          <div>
+            <b>Fontes:</b><br />
+            Portal da Transparência (CGU) — Downloads oficiais:<br />
+            <div class="sourceRow">
+              <a
+                href="https://portaldatransparencia.gov.br/download-de-dados/bolsa-familia-pagamentos"
+                target="_blank"
+                rel="noreferrer"
+                >Bolsa Família (pagamentos)</a
+              >
+              <span class="obsInline">— jan/2013 – nov/2021</span>
+            </div>
+            <div class="sourceRow">
+              <a
+                href="https://portaldatransparencia.gov.br/download-de-dados/auxilio-brasil"
+                target="_blank"
+                rel="noreferrer"
+                >Auxílio Brasil</a
+              >
+              <span class="obsInline">— nov/2021 – fev/2023</span>
+            </div>
+            <div class="sourceRow">
+              <a
+                href="https://portaldatransparencia.gov.br/download-de-dados/novo-bolsa-familia"
+                target="_blank"
+                rel="noreferrer"
+                >Novo Bolsa Família</a
+              >
+              <span class="obsInline">— mar/2023 em diante</span>
+            </div>
+            <span class="sourcesExtra">
+              <b>População:</b> IBGE (SIDRA) — População residente estimada (agregado 6579, variável 9324, N3=UF).
+              <span class="sourcePath">
+                — <a href="https://sidra.ibge.gov.br/tabela/6579" target="_blank" rel="noreferrer">SIDRA tabela 6579</a>
+              </span>
+              <br />
+              <b>Inflação p/ R$ 2021:</b> BCB/SGS IPCA variação mensal (série 433), fator anual usando índice de dezembro,
+              normalizado em dez/2021.
+              <span class="sourcePath">
+                — <a
+                  href="https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados?formato=json"
+                  target="_blank"
+                  rel="noreferrer"
+                  >SGS série 433 (API)</a
+                >
+              </span>
+            </span>
+            <br />
+            Dados trabalhados a partir dos arquivos disponibilizados pelo Portal (pagamentos e beneficiários), consolidados e enriquecidos no pipeline desta análise.
+          </div>
+
+          <div>
+            <b>Autor:</b> Leonardo Chalhoub<br />
+            <b>E-mail:</b> <a href="mailto:leochalhoub@hotmail.com">leochalhoub@hotmail.com</a><br />
+            <span class="linkedinBlock">
+              <img class="linkedinIcon linkedinIconLight" src="./linkedin-blue.svg" alt="LinkedIn" />
+              <img class="linkedinIcon linkedinIconDark" src="./linkedin%20white.svg" alt="LinkedIn" />
+              <b>LinkedIn:</b>
+              <a
+                class="linkedinLink"
+                href="https://www.linkedin.com/in/leonardochalhoub/"
+                target="_blank"
+                rel="noreferrer"
+                title="LinkedIn"
+              >
+                https://www.linkedin.com/in/leonardochalhoub/
+              </a>
+            </span>
+            <br />
+            <b>GitHub:</b>
+            <a href="https://github.com/leonardochalhoub/getPBFData" target="_blank" rel="noreferrer">
+              https://github.com/leonardochalhoub/getPBFData
+            </a>
+            <br />
+            <b>Data:</b> <span id="buildDate"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Counters disabled for local-only page
+      window.COUNTERS_API_BASE = "";
+    </script>
+    <script src="./app.js?v=4bf5ec5"></script>
+  </body>
+</html>

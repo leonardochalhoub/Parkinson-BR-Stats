@@ -1,0 +1,479 @@
+:root {
+  --text: #111;
+  --muted: #666;
+  --border: rgba(0, 0, 0, 0.08);
+  --panel-bg: #fff;
+  --code-bg: #f6f6f6;
+  --accent: #2b6cb0;
+  --page-bg: #f6f7fb;
+  --shadow: 0 10px 30px rgba(19, 33, 68, 0.06);
+  --shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.03);
+
+  --radius: 8px;
+  --space-1: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --control-height: 34px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif;
+  margin: 0;
+  color: var(--text);
+  background: var(--page-bg);
+}
+
+body.dark {
+  --text: #e8eef9;
+  --muted: rgba(232, 238, 249, 0.7);
+  --border: rgba(255, 255, 255, 0.12);
+  --panel-bg: #0f172a;
+  --code-bg: rgba(255, 255, 255, 0.06);
+  --accent: #60a5fa;
+  --page-bg: #0b1220;
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+
+.container {
+  /* Fit well on notebook screens without forcing vertical scroll */
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 14px;
+}
+
+.header {
+  margin-bottom: 10px;
+}
+
+.panel {
+  padding: 12px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* SVG is "HD" by nature; keep it crisp and sized like an icon */
+.brFlag {
+  /* Make it "text-height" and not dominant */
+  height: 1em;
+  width: auto;
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: -0.12em;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 14px;
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.themeToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--border);
+  transition: 0.2s;
+  border-radius: 999px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  transition: 0.2s;
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+}
+
+.switch input:checked + .slider {
+  background: color-mix(in srgb, var(--accent), #000 10%);
+}
+
+.switch input:checked + .slider:before {
+  transform: translate(20px, -50%);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.mainGrid {
+  display: grid;
+  /* 2-column dashboard:
+     - Left: filters
+     - Right: content stack (charts + map) */
+  grid-template-columns: 360px 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+/* Make the filters panel visually match the chart panels */
+.filtersPanel {
+  height: 100%;
+}
+
+@media (max-width: 1100px) {
+  .mainGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-sm), var(--shadow);
+  height: 100%;
+  /* Make Plotly canvases able to stretch to the panel height */
+  display: flex;
+  flex-direction: column;
+}
+
+.panelTitle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+/* Map top-right controls (colorscale moved from left filters) */
+.mapTopBar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.mapControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.mapControls label {
+  margin: 0;
+  font-size: 12px;
+}
+
+.mapControls select {
+  min-width: 190px;
+}
+
+.panelTitle h3 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.kicker {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.control {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.control button {
+  grid-column: 1 / -1;
+}
+
+
+label {
+  display: inline-block;
+  font-weight: 600;
+}
+
+select {
+  padding: 6px 10px;
+  height: var(--control-height);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
+  outline: none;
+}
+
+select:focus {
+  border-color: rgba(43, 108, 176, 0.55);
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.15);
+}
+
+button {
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 12px;
+}
+
+button:hover {
+  border-color: rgba(43, 108, 176, 0.55);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button.primary {
+  background: linear-gradient(180deg, #2b6cb0, #245c97);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #fff;
+}
+
+/* Responsive plot heights tuned to fit notebook screens without overflow */
+#barWrap {
+  flex: 1 1 auto;
+  min-height: clamp(300px, 36vh, 460px);
+}
+
+#benefWrap {
+  flex: 1 1 auto;
+  min-height: clamp(320px, 42vh, 560px);
+}
+
+#mapWrap {
+  flex: 1 1 auto;
+  min-height: clamp(480px, 64vh, 860px);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.countersBox {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 10px;
+  background: color-mix(in srgb, var(--panel-bg), var(--page-bg) 25%);
+  box-shadow: var(--shadow-sm);
+}
+
+.counterRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.tinyMuted {
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+code {
+  background: var(--code-bg);
+  padding: 1px 4px;
+  border-radius: 6px;
+}
+
+h3 {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.footerGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.sourcePath {
+  opacity: 0.9;
+}
+
+.sourceRow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 2px 0;
+  flex-wrap: wrap;
+}
+
+.obsInline {
+  opacity: 0.85;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.linkedinBlock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.linkedinLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.linkedinIcon {
+  width: 1.15em; /* slightly larger than text height */
+  height: 1.15em;
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: -0.12em; /* match .brFlag */
+}
+
+/* Light mode: show blue, hide white */
+.linkedinIconLight {
+  display: inline-block;
+}
+.linkedinIconDark {
+  display: none;
+}
+
+/* Dark mode: show white, hide blue */
+body.dark .linkedinIconLight {
+  display: none;
+}
+body.dark .linkedinIconDark {
+  display: inline-block;
+}
+
+a {
+  color: color-mix(in srgb, var(--accent), #1a4f9b 35%);
+  text-decoration: none;
+}
+
+body.dark a {
+  color: #93c5fd;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 1100px) {
+  .controls {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .control {
+    grid-template-columns: 84px 240px;
+  }
+
+  .control button {
+    grid-column: auto;
+  }
+}
+
+/* Phone layout: stack controls and buttons vertically */
+@media (max-width: 520px) {
+  .controls {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 12px;
+  }
+
+  .control {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+
+  .control button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .container {
+    padding: 12px;
+  }
+
+  .control {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+
+  label {
+    font-size: 12px;
+  }
+}
