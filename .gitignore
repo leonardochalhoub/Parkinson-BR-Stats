@@ -33,7 +33,6 @@ lakehouse/
 *.jsonl
 
 # Spark
-spark-warehouse/
 metastore_db/
 derby.log
 
