@@ -1,28 +1,21 @@
 """
-Bronze ingestion: CNES EQ (Equipamentos) .dbc files -> Delta.
+CNES EQ Bronze Ingestion
 
-Reads all downloaded .dbc files from data/cnes_eq/ and writes them as a unified Delta table.
-
-What this does:
-- Discovers all .dbc files in data/cnes_eq/
-- Converts each .dbc to pandas DataFrame
-- Extracts estado, mes, ano from filename (e.g., EQTO2509.dbc -> estado='TO', ano=2025, mes='09')
-- Adds source_file metadata column
-- Unions all DataFrames
-- Writes to Delta: lakehouse/bronze/cnes_eq
-
-Output:
-  lakehouse/bronze/cnes_eq (Delta table with estado, mes, ano columns)
-
-Run:
-  python app/src/bronze/cnes_eq_ingest_delta.py
+Stage 1: DBC -> Parquet (parallel, ordered progress)
+Stage 2: Spark reads Parquet
+Stage 3: Dynamic partition overwrite to Delta
 """
 
 from __future__ import annotations
 
+import argparse
 import pathlib
+import shutil
 import tempfile
-from typing import Iterator
+import multiprocessing as mp
+import io
+import contextlib
+import time
 
 import pandas as pd
 from dbfread import DBF
@@ -31,139 +24,170 @@ from pyspark.sql import functions as F
 from app.src.silver.common import LakehousePaths, build_delta_spark
 from pysus.utilities.readdbc import dbc2dbf
 
+
+# =========================
 # Config
+# =========================
+
 DATA_DIR = pathlib.Path("data/cnes_eq")
-BATCH_SIZE = 50  # Process files in batches to avoid memory issues
+TEMP_PARQUET_DIR = pathlib.Path("data/_tmp_cnes_eq_parquet")
 
 
-def list_dbc_files() -> list[pathlib.Path]:
-    """Return list of all .dbc files in DATA_DIR, sorted."""
-    if not DATA_DIR.exists():
-        raise FileNotFoundError(f"Data directory not found: {DATA_DIR}")
-    files = sorted(DATA_DIR.glob("*.dbc"))
-    if not files:
-        raise FileNotFoundError(f"No .dbc files found in {DATA_DIR}")
+# =========================
+# File Listing (ASC Ordered)
+# =========================
+
+def list_dbc_files(start_estado: str | None, only_estado: str | None):
+    files = sorted(DATA_DIR.glob("*.dbc"))  # ✅ Strict ASC order
+
+    if only_estado:
+        files = [f for f in files if f.name[2:4].upper() == only_estado.upper()]
+    elif start_estado:
+        files = [f for f in files if f.name[2:4].upper() >= start_estado.upper()]
+
     return files
 
 
-def read_dbc_as_pandas(dbc_path: pathlib.Path) -> pd.DataFrame:
-    """
-    Read a .dbc file into a pandas DataFrame.
-    
-    Process:
-    1. Convert .dbc to .dbf using pysus.utilities.readdbc.dbc2dbf
-    2. Read .dbf with latin-1 encoding (CNES standard)
-    3. Extract estado, mes, ano from filename (e.g., EQTO2509.dbc)
-    4. Add columns: source_file, estado, mes, ano
-    """
-    # Convert .dbc to .dbf (temporary file in system temp)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        dbf_path = pathlib.Path(tmpdir) / dbc_path.with_suffix(".dbf").name
-        dbc2dbf(str(dbc_path), str(dbf_path))
-        
-        # Read DBF with proper encoding
-        df = pd.DataFrame(iter(DBF(str(dbf_path), encoding="latin-1")))
-    
-    # Extract metadata from filename: EQXX####.dbc -> XX=estado, ##=ano, ##=mes
-    filename = dbc_path.stem  # e.g., "EQTO2509"
-    estado = filename[2:4]  # e.g., "TO"
-    yy = filename[4:6]  # e.g., "25"
-    mm = filename[6:8]  # e.g., "09"
-    
-    ano = 2000 + int(yy)  # Convert YY to YYYY (25 -> 2025)
-    
-    df["source_file"] = dbc_path.name
-    df["estado"] = estado
-    df["mes"] = mm
-    df["ano"] = ano
-    return df
+# =========================
+# Worker
+# =========================
+
+def dbc_to_parquet(dbc_path: pathlib.Path) -> tuple[str, int, bool]:
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+
+            dbf_path = pathlib.Path(tmpdir) / dbc_path.with_suffix(".dbf").name
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                dbc2dbf(str(dbc_path), str(dbf_path))
+
+            df = pd.DataFrame(iter(DBF(str(dbf_path), encoding="latin-1")))
+
+        if df.empty:
+            return (dbc_path.name, 0, True)
+
+        filename = dbc_path.stem
+        estado = filename[2:4]
+        yy = filename[4:6]
+        mm = filename[6:8]
+        ano = 2000 + int(yy)
+
+        df["source_file"] = dbc_path.name
+        df["estado"] = estado
+        df["mes"] = mm
+        df["ano"] = ano
+
+        out_file = TEMP_PARQUET_DIR / f"{dbc_path.stem}.parquet"
+        df.to_parquet(out_file, index=False)
+
+        return (dbc_path.name, len(df), True)
+
+    except Exception:
+        return (dbc_path.name, 0, False)
 
 
-def process_dbc_files_batched(files: list[pathlib.Path]) -> Iterator[pd.DataFrame]:
-    """
-    Yield batches of concatenated DataFrames (idempotent, memory-efficient).
-    
-    Process files in batches to avoid loading all data at once.
-    Skips files that fail to read.
-    """
-    for i in range(0, len(files), BATCH_SIZE):
-        batch = files[i : i + BATCH_SIZE]
-        dfs = []
-        for fpath in batch:
-            try:
-                df = read_dbc_as_pandas(fpath)
-                if len(df) > 0:
-                    dfs.append(df)
-                    print(f"  read {fpath.name} ({len(df)} rows)")
-                else:
-                    print(f"  skipped {fpath.name} (empty)")
-            except Exception as e:
-                print(f"  ERROR reading {fpath.name}: {e}")
-                continue
-        
-        if dfs:
-            batch_df = pd.concat(dfs, ignore_index=True)
-            print(f"  batch has {len(batch_df)} total rows")
-            yield batch_df
+# =========================
+# Main
+# =========================
 
+def main(start_estado: str | None, only_estado: str | None):
 
-def main() -> None:
-    print("=== CNES EQ DBC -> Delta Ingestion ===")
-    
-    files = list_dbc_files()
-    print(f"Found {len(files)} .dbc files in {DATA_DIR}\n")
-    
-    spark = build_delta_spark("bronze-cnes-eq-dbc")
+    print("\n=== CNES EQ Bronze Ingestion ===\n")
+
+    files = list_dbc_files(start_estado, only_estado)
+
+    if not files:
+        print("No files found.")
+        return
+
+    total_files = len(files)
+
+    print(f"Stage 1/3  |  DBC → Parquet")
+    print(f"Files: {total_files}\n")
+
+    # Reset temp dir
+    if TEMP_PARQUET_DIR.exists():
+        shutil.rmtree(TEMP_PARQUET_DIR)
+
+    TEMP_PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+
+    start_time = time.time()
+
+    success_count = 0
+
+    # ✅ Ordered processing
+    with mp.Pool(mp.cpu_count()) as pool:
+        for i, result in enumerate(pool.imap(dbc_to_parquet, files), 1):
+
+            filename, rows, success = result
+            percent = (i / total_files) * 100
+
+            if success:
+                success_count += 1
+                print(
+                    f"[{i:>4}/{total_files} | {percent:6.2f}%] "
+                    f"{filename:<15} → parquet  ({rows:,} rows)"
+                )
+            else:
+                print(
+                    f"[{i:>4}/{total_files} | {percent:6.2f}%] "
+                    f"{filename:<15} → FAILED"
+                )
+
+    elapsed = time.time() - start_time
+
+    print(f"\nDBC → Parquet completed in {elapsed:,.1f}s")
+    print(f"Successful files: {success_count}/{total_files}\n")
+
+    if success_count == 0:
+        print("No data converted. Exiting.")
+        return
+
+    # =========================
+    # Spark Phase
+    # =========================
+
+    print("Stage 2/3  |  Spark Read Parquet")
+    spark = build_delta_spark("bronze-cnes-eq")
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
+    df = spark.read.parquet(str(TEMP_PARQUET_DIR))
+    df = df.withColumn("ingested_at", F.current_timestamp())
+
+    print("Stage 3/3  |  Write Delta (dynamic partition overwrite)")
+
     paths = LakehousePaths()
     out_path = paths.bronze_root / "cnes_eq"
-    
-    # Create output directory
     paths.bronze_root.mkdir(parents=True, exist_ok=True)
-    
-    # Process files in batches and write to Delta incrementally
-    first_batch = True
-    total_rows = 0
-    batch_count = 0
-    
-    for batch_df in process_dbc_files_batched(files):
-        if batch_df.empty:
-            print("  skipping empty batch")
-            continue
-        
-        # Add timestamp column
-        batch_df["ingested_at"] = pd.Timestamp.now()
-        
-        # Convert to Spark DataFrame
-        try:
-            spark_df = spark.createDataFrame(batch_df)
-        except Exception as e:
-            print(f"  ERROR converting batch to Spark DataFrame: {e}")
-            continue
-        
-        # Add more metadata
-        spark_df = spark_df.withColumn("ingested_batch_at", F.current_timestamp())
-        
-        # Write to Delta with schema merge enabled and partitioned by estado, ano, mes
-        mode = "overwrite" if first_batch else "append"
-        try:
-            spark_df.write.format("delta").mode(mode).option("mergeSchema", "true").partitionBy("estado", "ano", "mes").save(str(out_path))
-        except Exception as e:
-            print(f"  ERROR writing batch to Delta: {e}")
-            continue
-        
-        rows_in_batch = len(batch_df)
-        total_rows += rows_in_batch
-        batch_count += 1
-        print(f"  ✓ batch {batch_count} written ({rows_in_batch} rows), total: {total_rows}\n")
-        first_batch = False
-    
-    print(f"\n=== Ingestion Complete ===")
-    print(f"Output Delta table: {out_path}")
-    print(f"Batches written: {batch_count}")
-    print(f"Total rows written: {total_rows}")
-    
+
+    (
+        df.write
+        .format("delta")
+        .mode("overwrite")
+        .option("mergeSchema", "true")
+        .partitionBy("estado", "ano", "mes")
+        .save(str(out_path))
+    )
+
+    print("\n✅ Ingestion complete.")
+    print(f"Delta table: {out_path}")
+
     spark.stop()
 
+    shutil.rmtree(TEMP_PARQUET_DIR)
+
+
+# =========================
+# CLI
+# =========================
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", dest="start_estado", default=None)
+    parser.add_argument("--only", dest="only_estado", default=None)
+
+    args = parser.parse_args()
+
+    main(args.start_estado, args.only_estado)
