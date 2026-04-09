@@ -1,0 +1,10 @@
+name = "getpbfdata-counters"
+main = "worker.js"
+compatibility_date = "2025-04-01"
+
+kv_namespaces = [
+  { binding = "COUNTERS", id = "9e7e17c17d314b2cb2e5e9806117398a" }
+]
+
+# Optional:
+# ALLOWED_ORIGINS = "https://leonardochalhoub.github.io,http://localhost:8000"
