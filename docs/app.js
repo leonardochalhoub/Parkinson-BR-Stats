@@ -90,7 +90,7 @@ async function initCounters() {
   };
 }
 
-const DATA_URL = "./data/mri_br_state_year.json";
+const DATA_URL = "./mri_br_state_year.json";
 
 const GEOJSON_URL = ["./brazil-states.geojson"];
 
