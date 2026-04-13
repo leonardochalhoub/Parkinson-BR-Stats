@@ -113,43 +113,69 @@ def build_mri_state_year(
         .where(F.col("qt_exist").isNotNull())
     )
 
-    # ── 2. Average monthly QT_EXIST per CNES per year (per sector) ──────────
+    # ── 2. Average monthly QT_EXIST per CNES per year ───────────────────────
     #
-    # For SUS / private splits: each (CNES, month) has at most one row per
-    # IND_SUS value, so a straight avg(qt_exist) over months is correct.
+    # Step 1: sum QT_EXIST per (CNES, month) across all sectors.
+    #   This handles the rare case where the same CNES has both a SUS row and
+    #   a private row in the same month (2 SUS + 1 private → monthly total = 3).
     #
-    # For the ALL-sector total: a CNES may have BOTH a SUS row and a private
-    # row in the same month (e.g. 2 SUS machines + 1 private machine).
-    # A naive avg(qt_exist) across both rows would give (2+1)/2 = 1.5 instead
-    # of the correct monthly total of 3.  Fix: sum QT_EXIST per (CNES, mes)
-    # first, then average the monthly totals over the year.
-    def cnes_year_avg(df: DataFrame) -> DataFrame:
-        """Sector-filtered path: at most one row per (CNES, month) → avg is safe."""
+    # Step 2: count the months the CNES was active (denominator for all averages).
+    #
+    # Step 3: all-sector avg = avg(monthly_total) — same as before.
+    #
+    # Step 4: per-sector avg = sum(qt_exist for that sector) / n_months_all.
+    #   Using the *total* month count (not just sector-active months) prevents
+    #   overcounting for CNES that switch IND_SUS mid-year.  Example: a CNES
+    #   with 10 machines that is SUS for Jan-Jun and private for Jul-Dec would
+    #   otherwise get SUS avg=10 + priv avg=10 = 20, when the correct total is 10.
+    #   With the shared denominator: SUS sum=60 / 12 = 5, priv sum=60 / 12 = 5,
+    #   total = 10 ✓.
+
+    # Monthly totals (all-sector)
+    monthly_all = (
+        df_mri.groupBy("estado", "ano", "cnes", "mes")
+        .agg(F.sum("qt_exist").alias("monthly_total"))
+    )
+
+    # Number of active months per CNES-year (shared denominator)
+    cnes_month_count = (
+        monthly_all.groupBy("estado", "ano", "cnes")
+        .agg(F.count("mes").alias("n_months"))
+    )
+
+    # All-sector annual average
+    cnes_all = (
+        monthly_all.groupBy("estado", "ano", "cnes")
+        .agg(F.avg("monthly_total").alias("avg_mri_cnes_year"))
+        .where(F.col("avg_mri_cnes_year").isNotNull())
+    )
+
+    def cnes_year_avg_sector(df_sector: DataFrame) -> DataFrame:
+        """
+        Per-sector annual average: sum(qt_exist over sector-active months) /
+        n_months (total active months across both sectors).
+
+        Dividing by the shared n_months instead of the sector-active month count
+        guarantees that sus_avg + priv_avg == all_avg, even for CNES that change
+        IND_SUS within the year.
+        """
+        sector_sum = (
+            df_sector.groupBy("estado", "ano", "cnes")
+            .agg(F.sum("qt_exist").alias("sector_sum"))
+        )
         return (
-            df.groupBy("estado", "ano", "cnes")
-            .agg(F.avg("qt_exist").alias("avg_mri_cnes_year"))
+            sector_sum
+            .join(cnes_month_count, on=["estado", "ano", "cnes"], how="left")
+            .withColumn(
+                "avg_mri_cnes_year",
+                F.col("sector_sum") / F.col("n_months"),
+            )
             .where(F.col("avg_mri_cnes_year").isNotNull())
+            .select("estado", "ano", "cnes", "avg_mri_cnes_year")
         )
 
-    def cnes_year_avg_all(df: DataFrame) -> DataFrame:
-        """All-sector path: sum rows within the same month first, then avg."""
-        monthly = (
-            df.groupBy("estado", "ano", "cnes", "mes")
-            .agg(F.sum("qt_exist").alias("monthly_total"))
-        )
-        return (
-            monthly.groupBy("estado", "ano", "cnes")
-            .agg(F.avg("monthly_total").alias("avg_mri_cnes_year"))
-            .where(F.col("avg_mri_cnes_year").isNotNull())
-        )
-
-    # cnes_all: used only for cnes_count (distinct facilities with any MRI).
-    # We intentionally do NOT use its avg_mri_cnes_year for total_mri_avg,
-    # because a CNES that flips IND_SUS mid-year appears in both cnes_sus and
-    # cnes_priv; the correct total is simply sus + priv (see step 5b below).
-    cnes_all  = cnes_year_avg_all(df_mri)
-    cnes_sus  = cnes_year_avg(df_mri.where(F.col("ind_sus") == F.lit("1")))
-    cnes_priv = cnes_year_avg(df_mri.where(F.col("ind_sus") == F.lit("0")))
+    cnes_sus  = cnes_year_avg_sector(df_mri.where(F.col("ind_sus") == F.lit("1")))
+    cnes_priv = cnes_year_avg_sector(df_mri.where(F.col("ind_sus") == F.lit("0")))
 
     # ── 3. State-year aggregates per sector ─────────────────────────────────
     # agg_cnes_count: only keep the distinct-facility count from cnes_all.
@@ -182,8 +208,8 @@ def build_mri_state_year(
     )
 
     # ── 5b. Derive total_mri_avg as sus + priv ───────────────────────────────
-    # This guarantees total = sus + priv, avoiding the double-count that arises
-    # when a CNES changes IND_SUS within a year.
+    # Because both sector averages share the same monthly denominator (step 2),
+    # sus + priv == all-sector total for every CNES, so the sum is exact.
     df_out = df_out.withColumn(
         "total_mri_avg",
         F.col("sus_total_mri_avg") + F.col("priv_total_mri_avg"),
