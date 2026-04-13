@@ -6,30 +6,20 @@ Goal
 From the Bronze CNES equipment Delta table, filter MRI equipment (CODEQUIP = '42'),
 then compute:
 
-1) avg_mri_per_cnes_year_state:
-   Average monthly MRI count per CNES, per year, per state.
+1) state-year aggregates for ALL equipment, SUS-only (IND_SUS='1'), and PRIVATE-only (IND_SUS='0'):
+   - cnes_count / sus_cnes_count / priv_cnes_count
+   - total_mri_avg / sus_total_mri_avg / priv_total_mri_avg
+   - mri_per_capita_scaled / sus_mri_per_capita_scaled / priv_mri_per_capita_scaled
 
-2) mri_state_year:
-   Aggregate to state-year and compute:
-   - avg_mri_per_cnes: average across CNES (of their yearly average)
-   - total_mri_avg: sum across CNES (of their yearly average)  [optional but useful]
-   - cnes_count: number of CNES contributing
+2) Join with Silver population (state-year) on a complete UF×Ano grid.
 
-3) Join with Silver population (state-year) and compute:
-   - mri_per_capita = avg_mri_per_cnes / populacao
-     (as requested: division between average MRI per state per year and population)
+3) Export the result as a flat JSON array to the web dashboard data paths.
 
 Inputs
 ------
 Bronze Delta:
 - lakehouse/bronze/cnes_eq
-  Expected columns at minimum:
-  - estado (UF sigla)
-  - ano (int)
-  - mes (string or int)
-  - CNES
-  - CODEQUIP
-  - QT_EXIST (equipment count)
+  columns used: estado, ano, mes, CNES, CODEQUIP, QT_EXIST, IND_SUS
 
 Silver Delta:
 - lakehouse/silver/population
@@ -40,15 +30,9 @@ Outputs
 Silver Delta:
 - lakehouse/silver/mri_br
 
-Schema (output)
----------------
-- estado (string)
-- ano (int)
-- cnes_count (long)
-- avg_mri_per_cnes (double)
-- total_mri_avg (double)
-- populacao (long)
-- mri_per_capita (double)
+JSON (for web):
+- app/web/web/data/mri_br_state_year.json
+- docs/data/mri_br_state_year.json
 
 Run
 ---
@@ -57,9 +41,10 @@ Run
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from pyspark.sql import DataFrame, Window, functions as F
+from pyspark.sql import DataFrame, functions as F
 
 from app.src.silver.common import LakehousePaths, build_delta_spark
 
@@ -67,49 +52,53 @@ BRONZE_CNES_EQ_PATH = "lakehouse/bronze/cnes_eq"
 SILVER_POPULATION_PATH = "lakehouse/silver/population"
 
 MRI_CODEQUIP = "42"
+PER_CAPITA_SCALE_POW10 = 6
+
+JSON_OUT_PATHS = [
+    "app/web/web/data/mri_br_state_year.json",
+    "docs/data/mri_br_state_year.json",
+]
+
+
+def _agg_state_year(df_cnes_year: DataFrame, prefix: str = "") -> DataFrame:
+    """
+    Aggregate per-CNES yearly averages to state-year level.
+
+    prefix=""    → columns: cnes_count, total_mri_avg
+    prefix="sus_" → columns: sus_cnes_count, sus_total_mri_avg
+    prefix="priv_" → columns: priv_cnes_count, priv_total_mri_avg
+    """
+    return df_cnes_year.groupBy("estado", "ano").agg(
+        F.countDistinct("cnes").cast("long").alias(f"{prefix}cnes_count"),
+        F.sum("avg_mri_cnes_year").alias(f"{prefix}total_mri_avg"),
+    )
 
 
 def build_mri_state_year(
     *,
     df_cnes_eq: DataFrame,
     df_population: DataFrame,
-    per_capita_scale_pow10: int = 6,
+    per_capita_scale_pow10: int = PER_CAPITA_SCALE_POW10,
 ) -> DataFrame:
     """
-    Build state-year MRI metrics joined with population.
+    Build state-year MRI metrics (all / SUS / private) joined with population.
 
-    Visual scaling
-    --------------
-    mri_per_capita is typically very small (equipment per person). For visualization,
-    we also provide a scaled version:
+    Sector split
+    ------------
+    IND_SUS = '1'  → machine is available for SUS (public) patients
+    IND_SUS = '0'  → machine is NOT available for SUS (private/non-SUS)
 
-      mri_per_capita_scaled = mri_per_capita * 10**per_capita_scale_pow10
+    Per-capita scaling
+    ------------------
+    Raw mri_per_capita is tiny (equipment per person).  Scaled by 10^6 to
+    express "MRI per 1M inhabitants".
 
-    Default is per 1 million people (10^6), i.e., "MRI por 1M habitantes".
-
-    Bulletproofing / completeness
-    -----------------------------
-    The CNES equipment table may have missing MRI rows for a given UF/year (e.g., no MRI equipment).
-    For mapping, we still want a complete UF×Ano grid with zeros (not missing rows), so all 27 UFs
-    appear in the choropleth.
-
-    Approach:
-    - Compute MRI metrics where MRI exists.
-    - Build a complete (estado, ano) grid from population (which should already be complete).
-    - Left join metrics onto that grid and fill missing metrics with 0.
-
-    Definition notes
-    ----------------
-    - QT_EXIST is treated as the monthly count of equipment existing for that CNES.
-    - First average across months within the year, for each (estado, ano, CNES).
-    - Then compute the *average across CNES* for that (estado, ano).
-
-    mri_per_capita = avg_mri_per_cnes / populacao
+    Completeness
+    ------------
+    Population provides the complete UF×Ano grid.  Missing MRI rows (no
+    equipment reported) are filled with 0 so all 27 UFs appear in the map.
     """
-    # Normalize types + filter MRI
-    # In pysus CNES equipment, QT_EXIST is the *quantity of equipment existing* for that CNES in that month.
-    # This is the column we want to average across months (within a year) because equipment count can vary
-    # month-to-month (e.g., 2→3 MRIs).
+    # ── 1. Normalize types, filter MRI, keep IND_SUS ────────────────────────
     df_mri = (
         df_cnes_eq.select(
             F.col("estado").cast("string").alias("estado"),
@@ -118,85 +107,120 @@ def build_mri_state_year(
             F.col("CNES").cast("string").alias("cnes"),
             F.col("CODEQUIP").cast("string").alias("codequip"),
             F.col("QT_EXIST").cast("double").alias("qt_exist"),
+            F.col("IND_SUS").cast("string").alias("ind_sus"),
         )
         .where(F.col("codequip") == F.lit(MRI_CODEQUIP))
         .where(F.col("qt_exist").isNotNull())
     )
 
-    # Average monthly MRI count for each CNES, state, year
-    df_cnes_year = (
-        df_mri.groupBy("estado", "ano", "cnes")
-        .agg(F.avg("qt_exist").alias("avg_mri_cnes_year"))
-        .where(F.col("avg_mri_cnes_year").isNotNull())
-    )
-
-    # State-year aggregates (only where MRI exists)
+    # ── 2. Average monthly QT_EXIST per CNES per year (per sector) ──────────
     #
-    # Interpretation:
-    # - avg_mri_cnes_year is the average monthly equipment count for a CNES in that year.
-    # - Summing across CNES gives an estimate of the average total MRI equipment in the UF for that year.
-    df_state_year_metrics = df_cnes_year.groupBy("estado", "ano").agg(
-        F.countDistinct("cnes").cast("long").alias("cnes_count"),
-        F.sum("avg_mri_cnes_year").alias("total_mri_avg"),
-    )
+    # For SUS / private splits: each (CNES, month) has at most one row per
+    # IND_SUS value, so a straight avg(qt_exist) over months is correct.
+    #
+    # For the ALL-sector total: a CNES may have BOTH a SUS row and a private
+    # row in the same month (e.g. 2 SUS machines + 1 private machine).
+    # A naive avg(qt_exist) across both rows would give (2+1)/2 = 1.5 instead
+    # of the correct monthly total of 3.  Fix: sum QT_EXIST per (CNES, mes)
+    # first, then average the monthly totals over the year.
+    def cnes_year_avg(df: DataFrame) -> DataFrame:
+        """Sector-filtered path: at most one row per (CNES, month) → avg is safe."""
+        return (
+            df.groupBy("estado", "ano", "cnes")
+            .agg(F.avg("qt_exist").alias("avg_mri_cnes_year"))
+            .where(F.col("avg_mri_cnes_year").isNotNull())
+        )
 
-    # For reference only: mean equipment per CNES in the UF-year
-    df_state_year_metrics = df_state_year_metrics.withColumn(
-        "avg_mri_per_cnes",
-        F.when(F.col("cnes_count") == 0, F.lit(0.0)).otherwise(F.col("total_mri_avg") / F.col("cnes_count")),
-    )
+    def cnes_year_avg_all(df: DataFrame) -> DataFrame:
+        """All-sector path: sum rows within the same month first, then avg."""
+        monthly = (
+            df.groupBy("estado", "ano", "cnes", "mes")
+            .agg(F.sum("qt_exist").alias("monthly_total"))
+        )
+        return (
+            monthly.groupBy("estado", "ano", "cnes")
+            .agg(F.avg("monthly_total").alias("avg_mri_cnes_year"))
+            .where(F.col("avg_mri_cnes_year").isNotNull())
+        )
 
-    # Population provides the complete UF×Ano grid we want to keep.
-    # population uses columns (uf, Ano)
+    # cnes_all: used only for cnes_count (distinct facilities with any MRI).
+    # We intentionally do NOT use its avg_mri_cnes_year for total_mri_avg,
+    # because a CNES that flips IND_SUS mid-year appears in both cnes_sus and
+    # cnes_priv; the correct total is simply sus + priv (see step 5b below).
+    cnes_all  = cnes_year_avg_all(df_mri)
+    cnes_sus  = cnes_year_avg(df_mri.where(F.col("ind_sus") == F.lit("1")))
+    cnes_priv = cnes_year_avg(df_mri.where(F.col("ind_sus") == F.lit("0")))
+
+    # ── 3. State-year aggregates per sector ─────────────────────────────────
+    # agg_cnes_count: only keep the distinct-facility count from cnes_all.
+    agg_cnes_count = (
+        cnes_all.groupBy("estado", "ano")
+        .agg(F.countDistinct("cnes").cast("long").alias("cnes_count"))
+    )
+    agg_sus  = _agg_state_year(cnes_sus,  prefix="sus_")
+    agg_priv = _agg_state_year(cnes_priv, prefix="priv_")
+
+    # ── 4. Complete UF×Ano grid from population ──────────────────────────────
     df_grid = df_population.select(
         F.col("uf").cast("string").alias("estado"),
         F.col("Ano").cast("int").alias("ano"),
         F.col("populacao").cast("long").alias("populacao"),
     )
 
-    # Left-join metrics into the complete grid and fill missing metrics with 0.
-    df_out = df_grid.join(df_state_year_metrics, on=["estado", "ano"], how="left").fillna(
-        {"cnes_count": 0, "avg_mri_per_cnes": 0.0, "total_mri_avg": 0.0}
+    # ── 5. Left-join all sectors onto the grid; fill missing with 0 ──────────
+    fill_zeros = {
+        "cnes_count": 0,
+        "sus_cnes_count": 0, "sus_total_mri_avg": 0.0,
+        "priv_cnes_count": 0, "priv_total_mri_avg": 0.0,
+    }
+    df_out = (
+        df_grid
+        .join(agg_cnes_count, on=["estado", "ano"], how="left")
+        .join(agg_sus,  on=["estado", "ano"], how="left")
+        .join(agg_priv, on=["estado", "ano"], how="left")
+        .fillna(fill_zeros)
     )
 
-    # Per-capita should use the UF total (sum of CNES-year averages), not the mean per CNES.
+    # ── 5b. Derive total_mri_avg as sus + priv ───────────────────────────────
+    # This guarantees total = sus + priv, avoiding the double-count that arises
+    # when a CNES changes IND_SUS within a year.
     df_out = df_out.withColumn(
-        "mri_per_capita",
-        F.when(F.col("populacao").isNull() | (F.col("populacao") == 0), F.lit(None).cast("double")).otherwise(
-            F.col("total_mri_avg") / F.col("populacao")
-        ),
+        "total_mri_avg",
+        F.col("sus_total_mri_avg") + F.col("priv_total_mri_avg"),
     )
 
-    scale_factor = F.pow(F.lit(10.0), F.lit(per_capita_scale_pow10).cast("double"))
-    df_out = df_out.withColumn("mri_per_capita_scaled", F.col("mri_per_capita") * scale_factor)
+    # ── 6. Per-capita (scaled) for each sector ───────────────────────────────
+    scale = F.pow(F.lit(10.0), F.lit(per_capita_scale_pow10).cast("double"))
+    pop = F.col("populacao")
+
+    def per_capita_scaled(total_col: str) -> F.Column:
+        return F.when(
+            pop.isNull() | (pop == 0), F.lit(0.0)
+        ).otherwise(F.col(total_col) / pop * scale)
+
+    df_out = (
+        df_out
+        .withColumn("mri_per_capita_scaled", per_capita_scaled("total_mri_avg"))
+        .withColumn("sus_mri_per_capita_scaled", per_capita_scaled("sus_total_mri_avg"))
+        .withColumn("priv_mri_per_capita_scaled", per_capita_scaled("priv_total_mri_avg"))
+        .withColumn("mri_per_capita_scale_pow10", F.lit(per_capita_scale_pow10).cast("int"))
+    )
 
     return df_out.select(
-        "estado",
-        "ano",
-        "cnes_count",
-        "avg_mri_per_cnes",
-        "total_mri_avg",
-        "populacao",
-        "mri_per_capita",
-        "mri_per_capita_scaled",
-        F.lit(per_capita_scale_pow10).cast("int").alias("mri_per_capita_scale_pow10"),
+        "estado", "ano",
+        # all
+        "cnes_count", "total_mri_avg", "mri_per_capita_scaled",
+        # SUS
+        "sus_cnes_count", "sus_total_mri_avg", "sus_mri_per_capita_scaled",
+        # private
+        "priv_cnes_count", "priv_total_mri_avg", "priv_mri_per_capita_scaled",
+        # population + scale metadata
+        "populacao", "mri_per_capita_scale_pow10",
     ).orderBy("estado", "ano")
 
 
-def write_mri_br(
-    *,
-    lakehouse_root: Path = Path("lakehouse"),
-    mode: str = "overwrite",
-    partition_by: tuple[str, ...] = ("ano",),
-) -> None:
-    spark = build_delta_spark("silver-mri-br")
+def write_delta(df_out: DataFrame, *, lakehouse_root: Path, mode: str = "overwrite") -> None:
     paths = LakehousePaths(lakehouse_root=lakehouse_root)
-
-    df_cnes_eq = spark.read.format("delta").load(BRONZE_CNES_EQ_PATH)
-    df_population = spark.read.format("delta").load(SILVER_POPULATION_PATH)
-
-    df_out = build_mri_state_year(df_cnes_eq=df_cnes_eq, df_population=df_population)
-
     paths.silver_root.mkdir(parents=True, exist_ok=True)
     out_path = paths.silver_root / "mri_br"
 
@@ -204,37 +228,65 @@ def write_mri_br(
         df_out.write.format("delta")
         .mode(mode)
         .option("overwriteSchema", "true")
-        .partitionBy(*partition_by)
+        .partitionBy("ano")
         .save(str(out_path))
     )
 
-    # Basic sanity log
     stats = (
         df_out.agg(
             F.min("ano").alias("min_ano"),
             F.max("ano").alias("max_ano"),
             F.countDistinct("estado").alias("ufs"),
             F.count("*").alias("rows"),
-            F.sum(F.when(F.col("populacao").isNull(), 1).otherwise(0)).alias("null_pop_rows"),
         )
         .collect()[0]
     )
     print(
-        "WROTE_SILVER_DELTA",
-        str(out_path),
-        "YEARS",
-        int(stats["min_ano"]),
-        int(stats["max_ano"]),
-        "UFS",
-        int(stats["ufs"]),
-        "ROWS",
-        int(stats["rows"]),
-        "ROWS_WITH_NULL_POP",
-        int(stats["null_pop_rows"]),
+        "WROTE_SILVER_DELTA", str(out_path),
+        "YEARS", int(stats["min_ano"]), int(stats["max_ano"]),
+        "UFS", int(stats["ufs"]),
+        "ROWS", int(stats["rows"]),
     )
+
+
+def export_json(df_out: DataFrame) -> None:
+    """Write the silver DataFrame as a flat JSON array to all web data paths."""
+    # Collect to driver, serialize manually to control float precision.
+    rows = df_out.collect()
+
+    records = []
+    for r in rows:
+        rec = r.asDict()
+        # Round scaled floats to avoid 15-digit noise
+        for key in ("mri_per_capita_scaled", "sus_mri_per_capita_scaled",
+                    "priv_mri_per_capita_scaled", "total_mri_avg",
+                    "sus_total_mri_avg", "priv_total_mri_avg"):
+            if rec.get(key) is not None:
+                rec[key] = round(float(rec[key]), 10)
+        records.append(rec)
+
+    json_bytes = json.dumps(records, ensure_ascii=False).encode("utf-8")
+
+    for out_path in JSON_OUT_PATHS:
+        p = Path(out_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(json_bytes)
+        print(f"JSON written → {out_path} ({p.stat().st_size / 1024:.1f} KB, {len(records)} rows)")
+
+
+def run(lakehouse_root: Path = Path("lakehouse")) -> None:
+    spark = build_delta_spark("silver-mri-br")
+
+    df_cnes_eq = spark.read.format("delta").load(BRONZE_CNES_EQ_PATH)
+    df_population = spark.read.format("delta").load(SILVER_POPULATION_PATH)
+
+    df_out = build_mri_state_year(df_cnes_eq=df_cnes_eq, df_population=df_population)
+
+    write_delta(df_out, lakehouse_root=lakehouse_root)
+    export_json(df_out)
 
     spark.stop()
 
 
 if __name__ == "__main__":
-    write_mri_br()
+    run()
