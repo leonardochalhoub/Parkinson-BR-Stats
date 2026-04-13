@@ -23,8 +23,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Data / Lakehouse (local only)
+# Data / Lakehouse (local only — but docs/data/ must be committed for GitHub Pages)
 data/
+!docs/data/
 lakehouse/
 *.parquet
 *.delta
