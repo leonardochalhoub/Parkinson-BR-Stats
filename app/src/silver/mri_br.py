@@ -31,7 +31,7 @@ Silver Delta:
 - lakehouse/silver/mri_br
 
 JSON (for web):
-- app/web/web/data/mri_br_state_year.json
+- app/web/data/mri_br_state_year.json
 - docs/data/mri_br_state_year.json
 
 Run
@@ -55,7 +55,7 @@ MRI_CODEQUIP = "42"
 PER_CAPITA_SCALE_POW10 = 6
 
 JSON_OUT_PATHS = [
-    "app/web/web/data/mri_br_state_year.json",
+    "app/web/data/mri_br_state_year.json",
     "docs/data/mri_br_state_year.json",
 ]
 
