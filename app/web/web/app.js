@@ -196,37 +196,56 @@ function renderKPIs({ rows, yearValue, years }) {
   if (!el) return;
 
   const isDark = document.body.classList.contains("dark");
+  const isAgg = yearValue === "AGG";
   const latestYear = years[years.length - 1];
-  const displayYear = yearValue === "AGG" ? latestYear : parseInt(yearValue, 10);
+  const displayYear = isAgg ? latestYear : parseInt(yearValue, 10);
   const prevYear = displayYear - 1;
 
-  const sum = (arr, field) => arr.reduce((s, r) => s + (r[field] || 0), 0);
-  const rowsY    = rows.filter((r) => r.ano === displayYear);
-  const rowsPrev = rows.filter((r) => r.ano === prevYear);
+  const sumRows = (arr, field) => arr.reduce((s, r) => s + (r[field] || 0), 0);
+
+  // AGG: average the Brazil-wide annual sum across all years.
+  // Specific year: that year's values directly.
+  function kpiSum(field) {
+    if (!isAgg) return sumRows(rows.filter((r) => r.ano === displayYear), field);
+    const byYear = sumByYear(rows, field);
+    const vals = years.map((y) => byYear.get(y) ?? 0);
+    return vals.reduce((s, v) => s + v, 0) / vals.length;
+  }
+
+  const total = kpiSum("total_mri_avg");
+  const sus   = kpiSum("sus_total_mri_avg");
+  const priv  = kpiSum("priv_total_mri_avg");
+  const cnes  = kpiSum("cnes_count");
+
   const rows05   = rows.filter((r) => r.ano === 2005);
+  const rowsPrev = rows.filter((r) => r.ano === prevYear);
+  const sus05    = sumRows(rows05,   "sus_total_mri_avg");
+  const priv05   = sumRows(rows05,   "priv_total_mri_avg");
 
-  const total   = sum(rowsY, "total_mri_avg");
-  const sus     = sum(rowsY, "sus_total_mri_avg");
-  const priv    = sum(rowsY, "priv_total_mri_avg");
-  const cnes    = sum(rowsY, "cnes_count");
+  // AGG always shows long-term growth (2005 → latest).
+  // Specific year shows YoY vs previous year.
+  let growthSusVal, growthPrivVal, growthSub, growthLabel;
+  if (isAgg) {
+    const susLatest  = sumRows(rows.filter((r) => r.ano === latestYear), "sus_total_mri_avg");
+    const privLatest = sumRows(rows.filter((r) => r.ano === latestYear), "priv_total_mri_avg");
+    growthSusVal  = sus05  > 0 ? ((susLatest  - sus05)  / sus05)  * 100 : null;
+    growthPrivVal = priv05 > 0 ? ((privLatest - priv05) / priv05) * 100 : null;
+    growthSub   = `2005 → ${latestYear}`;
+    growthLabel = "Cresc. Total";
+  } else {
+    const susPrev  = sumRows(rowsPrev, "sus_total_mri_avg");
+    const privPrev = sumRows(rowsPrev, "priv_total_mri_avg");
+    const yoySus  = susPrev  > 0 ? ((sus  - susPrev)  / susPrev)  * 100 : null;
+    const yoyPriv = privPrev > 0 ? ((priv - privPrev) / privPrev) * 100 : null;
+    growthSusVal  = yoySus  !== null ? yoySus  : (sus05  > 0 ? ((sus  - sus05)  / sus05)  * 100 : null);
+    growthPrivVal = yoyPriv !== null ? yoyPriv : (priv05 > 0 ? ((priv - priv05) / priv05) * 100 : null);
+    growthSub   = yoySus !== null ? `${prevYear} → ${displayYear}` : `2005 → ${displayYear}`;
+    growthLabel = yoySus !== null ? "Cresc. YoY" : "Cresc. Total";
+  }
 
-  const susPrev  = sum(rowsPrev, "sus_total_mri_avg");
-  const privPrev = sum(rowsPrev, "priv_total_mri_avg");
-  const sus05    = sum(rows05,   "sus_total_mri_avg");
-  const priv05   = sum(rows05,   "priv_total_mri_avg");
-
+  const countSub = isAgg ? `média ${years[0]}–${latestYear}` : `em ${displayYear}`;
   const susShare  = total > 0 ? (sus  / total) * 100 : 0;
   const privShare = total > 0 ? (priv / total) * 100 : 0;
-
-  const yoySus  = susPrev  > 0 ? ((sus  - susPrev)  / susPrev)  * 100 : null;
-  const yoyPriv = privPrev > 0 ? ((priv - privPrev) / privPrev) * 100 : null;
-  const longSus  = sus05   > 0 ? ((sus  - sus05)    / sus05)    * 100 : null;
-  const longPriv = priv05  > 0 ? ((priv - priv05)   / priv05)   * 100 : null;
-
-  const growthSusVal  = yoySus  !== null ? yoySus  : longSus;
-  const growthPrivVal = yoyPriv !== null ? yoyPriv : longPriv;
-  const growthSub     = yoySus  !== null ? `${prevYear} → ${displayYear}` : `2005 → ${displayYear}`;
-  const growthLabel   = yoySus  !== null ? "Cresc. YoY" : "Cresc. Total";
 
   const isUpSus  = growthSusVal  !== null && growthSusVal  >= 0;
   const isUpPriv = growthPrivVal !== null && growthPrivVal >= 0;
@@ -241,28 +260,28 @@ function renderKPIs({ rows, yearValue, years }) {
     {
       label: "Total RM no Brasil",
       value: formatInt(Math.round(total)),
-      sub: `equipamentos em ${displayYear}`,
+      sub: `equipamentos · ${countSub}`,
       borderColor: isDark ? "#60a5fa" : "#2563eb",
       color: isDark ? "#93c5fd" : "#1e3a8a",
     },
     {
       label: "Equipamentos SUS",
       value: formatInt(Math.round(sus)),
-      sub: `${formatNumber(susShare, { decimals: 1 })}% do total`,
+      sub: `${formatNumber(susShare, { decimals: 1 })}% do total · ${countSub}`,
       borderColor: "var(--sus)",
       color: susColor,
     },
     {
       label: "Equipamentos Privados",
       value: formatInt(Math.round(priv)),
-      sub: `${formatNumber(privShare, { decimals: 1 })}% do total`,
+      sub: `${formatNumber(privShare, { decimals: 1 })}% do total · ${countSub}`,
       borderColor: "var(--priv)",
       color: privColor,
     },
     {
       label: "Estabelecimentos CNES",
       value: formatInt(cnes),
-      sub: `com RM em ${displayYear}`,
+      sub: `com RM · ${countSub}`,
       borderColor: isDark ? "#34d399" : "#059669",
       color: tealColor,
     },
