@@ -3,7 +3,7 @@ main = "worker.js"
 compatibility_date = "2025-04-01"
 
 kv_namespaces = [
-  { binding = "COUNTERS", id = "REPLACE_WITH_KV_ID" }
+  { binding = "COUNTERS", id = "dbdc3054fc6f4049aa1a890880d1dba7" }
 ]
 
 [vars]
