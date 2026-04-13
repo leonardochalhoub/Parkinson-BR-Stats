@@ -516,27 +516,92 @@ body.dark .linkedinIconDark  { display: inline-block; }
 #zipProgress .kicker { margin-bottom: 8px; display: block; }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
+
+/* ── Wide tablets ────────────────────────────────────────────────────────── */
 @media (max-width: 1200px) {
   .row2 { grid-template-columns: 1fr 1.5fr; }
   .kpiRow { grid-template-columns: repeat(3, 1fr); }
 }
 
+/* ── Narrow tablets / landscape phones ───────────────────────────────────── */
 @media (max-width: 1000px) {
   .row1 { grid-template-columns: 260px 1fr; }
   .row2 { grid-template-columns: 1fr; align-items: start; }
   .row3 { grid-template-columns: 1fr; }
-  #mapWrap { min-height: clamp(460px, 60vh, 700px); }
+
+  #mapWrap     { min-height: clamp(380px, 54vh, 600px); }
+  #rankingWrap { min-height: clamp(380px, 54vh, 600px); }
 }
 
+/* ── Portrait tablets / large phones ─────────────────────────────────────── */
 @media (max-width: 720px) {
-  .row1 { grid-template-columns: 1fr; }
-  .row3 { grid-template-columns: 1fr; }
+  :root { --gap: 10px; }
+
+  .container { padding: 12px; }
+  .panel     { padding: 12px; }
+
+  .row1  { grid-template-columns: 1fr; }
+  .row3  { grid-template-columns: 1fr; }
   .kpiRow { grid-template-columns: repeat(2, 1fr); }
   .footer { grid-template-columns: 1fr; }
+
+  /* Chart heights — tighter on a phone screen */
+  #barWrap     { min-height: clamp(240px, 36vh, 380px); }
+  #rankingWrap { min-height: clamp(320px, 48vh, 520px); }
+  #mapWrap     { min-height: clamp(320px, 48vh, 520px); }
+  #regionWrap  { min-height: clamp(220px, 34vh, 360px); }
+  #deltaWrap   { min-height: clamp(220px, 34vh, 360px); }
+
+  /* Allow subtitle to wrap instead of overflowing */
+  .panelSub { white-space: normal; max-width: 60%; }
+
+  /* mapTopBar: allow wrapping when title + control don't fit */
+  .mapTopBar { flex-wrap: wrap; }
 }
 
+/* ── Smartphones (portrait) ──────────────────────────────────────────────── */
 @media (max-width: 480px) {
+  :root { --gap: 8px; }
+
   .container { padding: 10px; }
-  .kpiRow { grid-template-columns: 1fr 1fr; }
-  .kpiValue { font-size: 22px; }
+  .panel     { padding: 10px; }
+
+  /* Header: stack title and toggle vertically */
+  .header { flex-direction: column; gap: 8px; }
+  .themeToggle { align-self: flex-start; }
+
+  h1.title  { font-size: 17px; }
+  .subtitle { font-size: 11px; }
+
+  /* KPI cards */
+  .kpiRow    { grid-template-columns: 1fr 1fr; }
+  .kpiValue  { font-size: 20px; }
+  .kpiLabel  { font-size: 9px; }
+  .kpiSub    { font-size: 10px; }
+  .kpiCard   { padding: 10px 12px 8px; }
+
+  /* Chart heights — compact on small phones */
+  #barWrap     { min-height: clamp(200px, 34vh, 340px); }
+  #rankingWrap { min-height: clamp(280px, 44vh, 480px); }
+  #mapWrap     { min-height: clamp(280px, 44vh, 480px); }
+  #regionWrap  { min-height: clamp(200px, 32vh, 320px); }
+  #deltaWrap   { min-height: clamp(200px, 32vh, 320px); }
+
+  /* mapTopBar: stack panel label above the control row */
+  .mapTopBar { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .mapControls { align-self: stretch; }
+  .mapControls select { width: 100%; min-width: 0; }
+
+  /* panelSub: allow wrapping, left-aligned */
+  .panelSub { white-space: normal; max-width: 100%; text-align: left; }
+
+  /* Footer author grid: narrower key column */
+  .footerMeta { grid-template-columns: 58px 1fr; }
+}
+
+/* ── Very small phones (≤ 360px) ─────────────────────────────────────────── */
+@media (max-width: 360px) {
+  h1.title { font-size: 15px; }
+  .kpiValue { font-size: 18px; }
+  .kpiRow { gap: 6px; }
 }
