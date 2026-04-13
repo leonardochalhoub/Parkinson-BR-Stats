@@ -219,28 +219,37 @@ function renderKPIs({ rows, yearValue, years }) {
 
   const rows05   = rows.filter((r) => r.ano === 2005);
   const rowsPrev = rows.filter((r) => r.ano === prevYear);
-  const sus05    = sumRows(rows05,   "sus_total_mri_avg");
-  const priv05   = sumRows(rows05,   "priv_total_mri_avg");
+  const sus05    = sumRows(rows05, "sus_total_mri_avg");
+  const priv05   = sumRows(rows05, "priv_total_mri_avg");
 
-  // AGG always shows long-term growth (2005 → latest).
-  // Specific year shows YoY vs previous year.
-  let growthSusVal, growthPrivVal, growthSub, growthLabel;
+  // Three distinct cases — no mixing of YoY and long-term in the same render.
+  let growthSusVal, growthPrivVal, growthSub, growthLabel, growthIsBase;
+
   if (isAgg) {
+    // AGG: cumulative growth from 2005 → latest year
     const susLatest  = sumRows(rows.filter((r) => r.ano === latestYear), "sus_total_mri_avg");
     const privLatest = sumRows(rows.filter((r) => r.ano === latestYear), "priv_total_mri_avg");
     growthSusVal  = sus05  > 0 ? ((susLatest  - sus05)  / sus05)  * 100 : null;
     growthPrivVal = priv05 > 0 ? ((privLatest - priv05) / priv05) * 100 : null;
     growthSub   = `2005 → ${latestYear}`;
-    growthLabel = "Cresc. Total";
+    growthLabel = "Cresc. acum.";
+    growthIsBase = false;
+  } else if (displayYear === years[0]) {
+    // First year of the series — no prior year to compare
+    growthSusVal  = null;
+    growthPrivVal = null;
+    growthSub   = "ano base";
+    growthLabel = "Cresc. YoY";
+    growthIsBase = true;
   } else {
+    // Specific year: pure YoY vs previous year
     const susPrev  = sumRows(rowsPrev, "sus_total_mri_avg");
     const privPrev = sumRows(rowsPrev, "priv_total_mri_avg");
-    const yoySus  = susPrev  > 0 ? ((sus  - susPrev)  / susPrev)  * 100 : null;
-    const yoyPriv = privPrev > 0 ? ((priv - privPrev) / privPrev) * 100 : null;
-    growthSusVal  = yoySus  !== null ? yoySus  : (sus05  > 0 ? ((sus  - sus05)  / sus05)  * 100 : null);
-    growthPrivVal = yoyPriv !== null ? yoyPriv : (priv05 > 0 ? ((priv - priv05) / priv05) * 100 : null);
-    growthSub   = yoySus !== null ? `${prevYear} → ${displayYear}` : `2005 → ${displayYear}`;
-    growthLabel = yoySus !== null ? "Cresc. YoY" : "Cresc. Total";
+    growthSusVal  = susPrev  > 0 ? ((sus  - susPrev)  / susPrev)  * 100 : null;
+    growthPrivVal = privPrev > 0 ? ((priv - privPrev) / privPrev) * 100 : null;
+    growthSub   = `${prevYear} → ${displayYear}`;
+    growthLabel = "Cresc. YoY";
+    growthIsBase = false;
   }
 
   const countSub = isAgg ? `média ${years[0]}–${latestYear}` : `em ${displayYear}`;
@@ -285,24 +294,28 @@ function renderKPIs({ rows, yearValue, years }) {
       borderColor: isDark ? "#34d399" : "#059669",
       color: tealColor,
     },
-    growthSusVal !== null
-      ? {
-          label: `${growthLabel} Público`,
-          value: `${isUpSus ? "▲" : "▼"} ${isUpSus ? "+" : ""}${formatNumber(growthSusVal, { decimals: 1 })}%`,
-          sub: growthSub,
-          borderColor: isUpSus ? (isDark ? "#4ade80" : "#16a34a") : redColor,
-          color: isUpSus ? greenColor : redColor,
-        }
-      : { label: "Cresc. Público", value: "—", sub: "sem dados", borderColor: "#94a3b8", color: "#94a3b8" },
-    growthPrivVal !== null
-      ? {
-          label: `${growthLabel} Privado`,
-          value: `${isUpPriv ? "▲" : "▼"} ${isUpPriv ? "+" : ""}${formatNumber(growthPrivVal, { decimals: 1 })}%`,
-          sub: growthSub,
-          borderColor: isUpPriv ? (isDark ? "#f472b6" : "#be185d") : redColor,
-          color: isUpPriv ? privColor : redColor,
-        }
-      : { label: "Cresc. Privado", value: "—", sub: "sem dados", borderColor: "#94a3b8", color: "#94a3b8" },
+    growthIsBase
+      ? { label: `${growthLabel} Público`,  value: "ano base", sub: growthSub, borderColor: "#94a3b8", color: "#94a3b8" }
+      : growthSusVal !== null
+        ? {
+            label: `${growthLabel} Público`,
+            value: `${isUpSus ? "▲" : "▼"} ${isUpSus ? "+" : ""}${formatNumber(growthSusVal, { decimals: 1 })}%`,
+            sub: growthSub,
+            borderColor: isUpSus ? (isDark ? "#4ade80" : "#16a34a") : redColor,
+            color: isUpSus ? greenColor : redColor,
+          }
+        : { label: `${growthLabel} Público`,  value: "—", sub: growthSub, borderColor: "#94a3b8", color: "#94a3b8" },
+    growthIsBase
+      ? { label: `${growthLabel} Privado`, value: "ano base", sub: growthSub, borderColor: "#94a3b8", color: "#94a3b8" }
+      : growthPrivVal !== null
+        ? {
+            label: `${growthLabel} Privado`,
+            value: `${isUpPriv ? "▲" : "▼"} ${isUpPriv ? "+" : ""}${formatNumber(growthPrivVal, { decimals: 1 })}%`,
+            sub: growthSub,
+            borderColor: isUpPriv ? (isDark ? "#f472b6" : "#be185d") : redColor,
+            color: isUpPriv ? privColor : redColor,
+          }
+        : { label: `${growthLabel} Privado`, value: "—", sub: growthSub, borderColor: "#94a3b8", color: "#94a3b8" },
   ];
 
   el.innerHTML = cards
